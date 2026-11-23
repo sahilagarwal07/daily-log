@@ -153,10 +153,18 @@ svg.chart{width:100%;height:auto;display:block;overflow:visible}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap}
 .legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;background:var(--lc,var(--accent))}
 
+.vd{display:flex;gap:10px;padding:10px 12px;border-radius:12px;background:var(--surface2);margin-top:8px;font-size:14px;line-height:1.45}
+.vd .vi{flex:none}
+.vd.good{background:color-mix(in srgb,var(--good) 13%,var(--surface))}
+.vd.warn{background:color-mix(in srgb,var(--warn) 17%,var(--surface))}
+.vd.tip{background:color-mix(in srgb,var(--accent) 9%,var(--surface))}
+.aiopt{background:var(--surface2);border-radius:14px;padding:12px;margin-top:12px}
+.aitext{margin-top:12px;font-size:14px;line-height:1.55;background:var(--surface2);border-radius:14px;padding:12px}
+.aitext.err{background:color-mix(in srgb,var(--warn) 17%,var(--surface))}
 /* bottom nav */
-.tabs{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:100%;max-width:760px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:var(--surface);padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));border-radius:22px 22px 0 0;box-shadow:0 -6px 24px rgba(30,45,120,.12);z-index:5}
-.tab{border:0;background:transparent;padding:6px 2px;border-radius:14px;font-weight:700;font-size:12px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px}
-.tab .ti{font-size:21px;line-height:1.1}
+.tabs{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:100%;max-width:760px;display:grid;grid-template-columns:repeat(5,1fr);gap:2px;background:var(--surface);padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));border-radius:22px 22px 0 0;box-shadow:0 -6px 24px rgba(30,45,120,.12);z-index:5}
+.tab{border:0;background:transparent;padding:6px 2px;border-radius:14px;font-weight:700;font-size:11px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px}
+.tab .ti{font-size:20px;line-height:1.1}
 .tab[aria-selected="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--accent)}
 
 .status{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:99px;font-size:13px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:6}
@@ -209,7 +217,7 @@ var WEEKDAY_NOTE = {3:"Easy walking, gentle mobility or yoga. Avoid anything tha
 var S = {
   date: todayKey(), tab: "diet",
   days: {}, settings: {}, dirty: {},
-  store: null, uid: null, mode: "local", timers: {}, quickSlot: null, editQuick: false
+  store: null, uid: null, mode: "local", timers: {}, quickSlot: null, editQuick: false, aiText: ""
 };
 
 /* ---------- helpers ---------- */
@@ -423,7 +431,7 @@ function render(){
   html+='<div id="panel">'+panelHtml()+'</div>';
   html+='<div class="footer"><span id="modeNote"></span><span><button class="linkbtn dim" data-act="export">Export data</button> · <button class="linkbtn dim" data-act="settings">Targets and start date</button></span></div>';
   html+='<nav class="tabs" role="tablist">'+
-    [["diet","🍽️","Diet"],["workout","🏋️","Workout"],["body","📏","Body"],["progress","📈","Progress"]].map(function(t){
+    [["diet","🍽️","Diet"],["workout","🏋️","Workout"],["body","📏","Body"],["coach","🧠","Coach"],["progress","📈","Progress"]].map(function(t){
       return '<button class="tab" role="tab" data-act="tab" data-tab="'+t[0]+'" aria-selected="'+(S.tab===t[0])+'"><span class="ti">'+t[1]+'</span>'+t[2]+'</button>';
     }).join("")+'</nav>';
   app.innerHTML=html;
@@ -433,6 +441,7 @@ function panelHtml(){
   if(S.tab==="diet")return dietHtml();
   if(S.tab==="workout")return workoutHtml();
   if(S.tab==="body")return bodyHtml();
+  if(S.tab==="coach")return coachHtml();
   return progressHtml();
 }
 function rerenderPanel(){var p=$("#panel");if(p)p.innerHTML=panelHtml();updateTotals()}
@@ -588,6 +597,255 @@ function elbowNote(b){
   return '<div class="callout">Elbow at 4/10 or higher. Your plan says to reduce or stop the load that aggravates it, not to mask it with painkillers, and to see a sports physiotherapist if it persists.</div>';
 }
 
+/* ---------- coach ---------- */
+function lsGet(k){try{return localStorage.getItem(k)||""}catch(e){return ""}}
+function lsSet(k,v){try{if(v)localStorage.setItem(k,v);else localStorage.removeItem(k)}catch(e){}}
+function V(st,t){return {s:st,t:t}}
+function parseTarget(str){
+  var m=String(str||"").match(/(\d+)\s*[–-]\s*(\d+)/);
+  if(m)return {lo:+m[1],hi:+m[2]};
+  m=String(str||"").match(/(\d+)/);
+  return m?{lo:+m[1],hi:+m[1]}:null;
+}
+function lastDaysRange(end,n){var out=[];for(var i=0;i<n;i++){var k=addDays(end,-i);out.push({k:k,d:peekDay(k)})}return out}
+function elbowFlag(end){
+  var hi=false,worse=false,any=false;
+  lastDaysRange(end,7).forEach(function(x){
+    var b=x.d&&x.d.body;if(!b)return;
+    if(b.elbowDuring!=null){any=true;if(b.elbowDuring>=4)hi=true}
+    if(b.elbowNext!=null){any=true;if(b.elbowNext>=4)hi=true;if(b.elbowDuring!=null&&b.elbowNext-b.elbowDuring>=2)worse=true}
+  });
+  return {hi:hi,worse:worse,any:any};
+}
+function verdicts(list){
+  var ic={good:"✅",warn:"⚠️",tip:"💡",info:"ℹ️"};
+  return list.map(function(v){return '<div class="vd '+v.s+'"><span class="vi">'+ic[v.s]+'</span><div>'+esc(v.t)+'</div></div>'}).join("");
+}
+function coachToday(k){
+  var d=peekDay(k),T=targets(),out=[],isT=(k===todayKey());
+  var meals=d?(d.meals||[]):[];
+  if(!meals.length){
+    out.push(V("info",isT?"Nothing logged yet today. Log your meals and they will be checked against your targets.":"Nothing logged for this day."));
+  } else {
+    var t=dayTotals(d),sofar=isT?" so far":"";
+    var rk=t.k/T.kcal;
+    if(rk<0.85)out.push(V("warn","Calories"+sofar+" are "+Math.round(t.k)+" against a target of "+T.kcal+". On a lean-gain plan, regular shortfalls slow progress."+(isT?" If the day is not over, peanut butter, milk, paneer or a banana are easy additions.":"")));
+    else if(rk<=1.1)out.push(V("good","Calories"+sofar+" are on target ("+Math.round(t.k)+" of "+T.kcal+")."));
+    else out.push(V("tip","Calories"+sofar+" are "+Math.round(t.k-T.kcal)+" above target. Fine occasionally. Your plan only suggests trimming if weight rises faster than about 300–400 g a week."));
+    var rp=t.p/T.p;
+    if(rp<0.8)out.push(V("warn","Protein"+sofar+" is "+r1(t.p)+" g against "+T.p+" g. A whey scoop (about 24 g), paneer, eggs or dal can close the gap."));
+    else if(rp>=0.9)out.push(V("good","Protein"+sofar+" is "+r1(t.p)+" g, at or near your "+T.p+" g target."));
+    else out.push(V("tip","Protein"+sofar+" is "+r1(t.p)+" g, close to your "+T.p+" g target. A little more would hit it."));
+    var strong=0;
+    SLOTS.forEach(function(_,si){var p=0;meals.forEach(function(m){if((m.slot||0)===si)p+=mTot(m).p});if(p>=20)strong++});
+    if(t.p>=60){
+      if(strong>=4)out.push(V("good","Protein is spread across "+strong+" meals, as your plan suggests."));
+      else out.push(V("tip","Protein is concentrated in "+strong+" meal"+(strong===1?"":"s")+". Your plan spreads it over about 4 meals of roughly 25–35 g each."));
+    }
+    if(!isT){
+      if(t.c/T.c<0.7)out.push(V("tip","Carbs were low ("+Math.round(t.c)+" g against "+T.c+" g). They fuel your training and support the calorie surplus."));
+      if(t.f/T.f>1.3)out.push(V("tip","Fat was well above target ("+Math.round(t.f)+" g against "+T.f+" g). Check oil, nuts, peanut butter and paneer portions."));
+    }
+  }
+  var water=d?d.water||0:0;
+  if(water>0){
+    if(water/T.water>=0.9)out.push(V("good","Water is on target ("+(water/1000).toFixed(1)+" L)."));
+    else if(!isT&&water/T.water<0.6)out.push(V("tip","Water was low ("+(water/1000).toFixed(1)+" L). Your plan suggests roughly 2.5–3 L a day."));
+  } else if(!isT&&meals.length){
+    out.push(V("tip","No water was logged for this day."));
+  }
+  if(d&&d.workout){
+    var planned=0,done=0;
+    (d.workout.exercises||[]).forEach(function(e){(e.sets||[]).forEach(function(s){planned++;if(s.done)done++})});
+    if(planned>0){
+      if(done===planned)out.push(V("good","Training: all "+planned+" sets completed."));
+      else if(done>0)out.push(V("tip","Training: "+done+" of "+planned+" sets ticked off."));
+    }
+  }
+  return out;
+}
+function coachWeek(end){
+  var T=targets(),out=[],rng=lastDaysRange(end,7);
+  var logged=0,sk=0,sp=0,hitP=0,sessions=0,sleepV=[];
+  rng.forEach(function(x){
+    var d=x.d;if(!d)return;
+    if((d.meals||[]).length){var t=dayTotals(d);logged++;sk+=t.k;sp+=t.p;if(t.p>=T.p*0.9)hitP++}
+    var done=0;((d.workout||{}).exercises||[]).forEach(function(e){(e.sets||[]).forEach(function(s){if(s.done)done++})});
+    if(done)sessions++;
+    if(d.body&&d.body.sleep!=null)sleepV.push(d.body.sleep);
+  });
+  if(!logged){
+    out.push(V("info","No meals logged in the last 7 days yet."));
+  } else {
+    var ak=sk/logged,ap=sp/logged;
+    if(logged<5)out.push(V("tip","Food was logged on "+logged+" of 7 days. Averages are more reliable with at least 5 days of logging."));
+    if(ak/T.kcal<0.9)out.push(V("warn","Average intake is "+Math.round(ak)+" kcal, about "+Math.round(T.kcal-ak)+" below target. If your weight is not rising, this is the likely reason."));
+    else if(ak/T.kcal<=1.1)out.push(V("good","Average intake is "+Math.round(ak)+" kcal, close to your "+T.kcal+" kcal target."));
+    else out.push(V("tip","Average intake is "+Math.round(ak)+" kcal, above target. Check whether weight is rising faster than about 300–400 g a week."));
+    if(hitP>=5)out.push(V("good","Protein reached about 90% of target on "+hitP+" of "+logged+" logged days (average "+Math.round(ap)+" g)."));
+    else out.push(V("warn","Protein reached about 90% of target on only "+hitP+" of "+logged+" logged days (average "+Math.round(ap)+" g against "+T.p+" g). Whey or paneer can close the gap."));
+  }
+  if(sessions>4)out.push(V("tip","You trained on "+sessions+" days. The plan has 4 training days plus recovery, and extra sessions add elbow and grip load."));
+  else if(sessions===4)out.push(V("good","You trained on all 4 planned days."));
+  else if(sessions===3)out.push(V("tip","You trained on 3 of the 4 planned days. One more session would complete the week."));
+  else out.push(V("warn","You trained on "+sessions+" of the 4 planned days. Consistency matters more than intensity in this phase."));
+  var nowAvg=windowAvg(end,0,6),prevAvg=windowAvg(end,7,13),prev2=windowAvg(end,14,20);
+  if(nowAvg==null)out.push(V("info","Log your morning weight to track the trend."));
+  else if(prevAvg==null)out.push(V("info","7-day average weight is "+r1(nowAvg)+" kg. A second week of data is needed to compare."));
+  else {
+    var dl=nowAvg-prevAvg;
+    if(prev2!=null&&nowAvg<=prev2+0.05)out.push(V("warn","The 7-day average has not risen over two weeks ("+r1(nowAvg)+" kg). Your plan suggests adding 100–150 kcal a day."));
+    else if(dl>0.4)out.push(V("tip","Weight is up "+Math.round(dl*1000)+" g on the week, faster than about 300–400 g. Your plan suggests considering 100–150 kcal a day less."));
+    else if(dl>=0.1)out.push(V("good","Weight is up "+Math.round(dl*1000)+" g on the week (average "+r1(nowAvg)+" kg), in line with a lean gain."));
+    else out.push(V("info","Weight is roughly flat this week ("+r1(nowAvg)+" kg). If it stays flat for two weeks, your plan says to add 100–150 kcal a day."));
+  }
+  if(sleepV.length){
+    var sa=sleepV.reduce(function(a,b){return a+b},0)/sleepV.length;
+    if(sa<7)out.push(V("warn","Average sleep is "+r1(sa)+" h. Your plan targets 7–9 h, and recovery depends on it."));
+    else out.push(V("good","Average sleep is "+r1(sa)+" h, within your 7–9 h target."));
+  }
+  var ef=elbowFlag(end);
+  if(ef.hi)out.push(V("warn","An elbow reading reached 4/10 or higher this week. Your plan says to reduce or stop the load that aggravates it, not to mask it with painkillers, and to see a sports physiotherapist if it persists."));
+  else if(ef.worse)out.push(V("tip","Next-morning elbow was worse than during training on at least one day. That points to too much load or grip volume, so ease off a little."));
+  else if(ef.any)out.push(V("good","Elbow readings stayed low this week."));
+  else out.push(V("info","No elbow readings this week. Log them on the Body tab, especially the next-morning reading."));
+  return out;
+}
+function coachProgress(end){
+  var out=[],ef=elbowFlag(end),ph=phaseInfo(end),seen={},items=[];
+  for(var i=0;i<14;i++){
+    var dk=addDays(end,-i),d=peekDay(dk);
+    if(!d||!d.workout)continue;
+    (d.workout.exercises||[]).forEach(function(e){
+      if(seen[e.name]||!e.target)return;
+      var done=(e.sets||[]).filter(function(s){return s.done&&num(s.r)>0});
+      if(!done.length)return;
+      seen[e.name]=1;items.push({e:e,done:done});
+    });
+  }
+  if(!items.length)return [V("info","Tick off completed sets on the Workout tab and suggestions for the next session will appear here.")];
+  if(ef.hi)return [V("warn","Elbow readings were 4/10 or higher this week. Hold your loads and avoid adding grip-heavy volume until it settles.")];
+  if(ph.w>=1&&ph.w<=2)return [V("tip","Weeks 1–2 are reconditioning: keep loads light and consistent rather than progressing.")];
+  items.slice(0,8).forEach(function(it){
+    var e=it.e,tg=parseTarget(e.target);if(!tg)return;
+    var maxW=0;it.done.forEach(function(s){if(num(s.w)>maxW)maxW=num(s.w)});
+    var at=maxW?" at "+maxW+" kg":"";
+    var full=it.done.length>=(e.sets||[]).length;
+    var allTop=full&&it.done.every(function(s){return num(s.r)>=tg.hi});
+    var belowLo=it.done.some(function(s){return num(s.r)<tg.lo});
+    if(allTop)out.push(V("good",e.name+": you hit "+tg.hi+" on every set"+at+". Next time try a small load increase, then return to "+tg.lo+"."));
+    else if(belowLo)out.push(V("tip",e.name+": some sets were under "+tg.lo+at+". Stay at this load until every set reaches "+tg.lo+"."));
+    else out.push(V("info",e.name+": keep the load"+at+" and add reps towards "+tg.hi+" on every set."));
+  });
+  out.push(V("info","Per your plan, change one variable at a time and do not add weight automatically every week."));
+  return out;
+}
+function coachHtml(){
+  var end=S.date;
+  var h='<section class="card"><h2>🧠 Coach</h2><div class="muted">Checks that apply your plan’s rules to what you logged. Free, instant and private. General guidance, not medical advice.</div></section>';
+  h+='<section class="card"><h3>'+(end===todayKey()?'Today':esc(fmtDate(end)))+'</h3>'+verdicts(coachToday(end))+'</section>';
+  h+='<section class="card"><h3>Last 7 days</h3>'+verdicts(coachWeek(end))+'</section>';
+  h+='<section class="card"><h3>Next session</h3>'+verdicts(coachProgress(end))+'</section>';
+  h+=aiCard();
+  return h;
+}
+
+/* ---------- optional AI review ---------- */
+function daySummary(k){
+  var d=peekDay(k);
+  var hd=parseKey(k).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+  if(!d)return hd+": no entries";
+  var meals=d.meals||[],w=d.workout||{},b=d.body||{},t=dayTotals(d),parts=[hd+":"];
+  var exs=(w.exercises||[]).map(function(e){
+    var done=(e.sets||[]).filter(function(s){return s.done});
+    if(!done.length)return null;
+    return e.name+" "+done.map(function(s){return (s.w?s.w+"kg x ":"")+(s.r||"?")}).join(", ");
+  }).filter(Boolean);
+  parts.push("  Training: "+(w.type||"none logged")+(exs.length?" | "+exs.join(" ; "):""));
+  var ml=SLOTS.map(function(sl,si){
+    var it=meals.filter(function(m){return (m.slot||0)===si});
+    return it.length?sl.split(" /")[0]+": "+it.map(function(m){return m.n+(mq(m)!==1?" x"+r1(mq(m)):"")}).join(", "):null;
+  }).filter(Boolean);
+  parts.push("  Food: "+(ml.length?ml.join(" | "):"none logged"));
+  if(meals.length)parts.push("  Totals: "+Math.round(t.k)+" kcal, "+r1(t.p)+" g protein, "+r1(t.c)+" g carbs, "+r1(t.f)+" g fat");
+  var bl=[];
+  if(d.water)bl.push("water "+(d.water/1000).toFixed(2)+" L");
+  if(b.weight!=null)bl.push("weight "+b.weight+" kg");
+  if(b.waist!=null)bl.push("waist "+b.waist+" cm");
+  if(b.sleep!=null)bl.push("sleep "+b.sleep+" h");
+  if(b.elbowDuring!=null)bl.push("elbow during training "+b.elbowDuring+"/10");
+  if(b.elbowNext!=null)bl.push("elbow next morning "+b.elbowNext+"/10");
+  if(w.notes)bl.push("session notes: "+w.notes);
+  if(b.notes)bl.push("notes: "+b.notes);
+  if(bl.length)parts.push("  Other: "+bl.join(", "));
+  return parts.join("\n");
+}
+function buildPrompt(end){
+  var T=targets(),ph=phaseInfo(end);
+  var lines=[
+    "You are a careful, honest strength and nutrition coach. Review my last 7 days of training and food logs below and give practical feedback.",
+    "",
+    "Context: I am restarting resistance training after a layoff at about 60 kg, aiming for a lean gain to 65–67 kg at roughly 0.15–0.25 kg per week. I previously developed tennis-elbow type symptoms after increasing intensity too quickly, so protecting the elbow matters."+(ph.w>=1?" I am in week "+ph.w+" of a 16-week plan ("+ph.ph+": "+ph.line+")":""),
+    "My plan: 4 days a week (Upper A, Lower A, Upper B, Lower B), double progression (reach the top of the rep range with clean form, then make a small load increase, changing one variable at a time), no failure training, protein spread over about 4 meals.",
+    "My daily targets: "+T.kcal+" kcal, "+T.p+" g protein, "+T.c+" g carbs, "+T.f+" g fat, about "+(T.water/1000).toFixed(1)+" L water.",
+    "Elbow scale: 0 none to 10 worst, logged during training and the next morning.",
+    "",
+    "Reply in plain text under 350 words with: 1) a two-sentence overall verdict, 2) nutrition: what is working and what to fix, 3) training: progress and what to change next session, 4) elbow and recovery, 5) three concrete actions for the next 7 days. Use my actual numbers. Do not diagnose; say when I should see a sports physiotherapist. If data is missing, say so instead of guessing.",
+    "",
+    "MY LOG (last 7 days, oldest first):"
+  ];
+  for(var i=6;i>=0;i--)lines.push(daySummary(addDays(end,-i)));
+  return lines.join("\n");
+}
+function fmtAi(t){return esc(t).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>")}
+function showAi(text,isErr){
+  var o=$("#aiout");if(!o)return;
+  o.innerHTML='<div class="aitext'+(isErr?' err':'')+'">'+fmtAi(text)+'</div>';
+}
+function aiCard(){
+  var key=lsGet("fitlog.aikey"),model=lsGet("fitlog.aimodel")||"gemini-flash-latest";
+  var h='<section class="card"><h2>🤖 AI review (optional)</h2><div class="muted">For a written review from a real AI model without paying, pick one:</div>';
+  h+='<div class="aiopt"><b>Option 1: copy and paste</b><div class="muted">Copies your last 7 days and your plan rules. Paste it into any free AI chat, such as Claude, ChatGPT or Gemini. Your log goes to whichever service you paste it into.</div><button class="btn primary" style="margin-top:10px" data-act="copysummary">Copy my week for AI</button></div>';
+  h+='<div class="aiopt"><b>Option 2: built-in, with a free Gemini key</b><div class="muted">Create a free key in Google AI Studio, paste it here, then ask from this page. The key stays in this browser only and is not part of your exported data. Free limits and model names change, so edit the model name if you get an error. This works in the copy hosted on GitHub, not in the Claude-hosted page.</div>'+
+    '<div class="fields" style="margin-top:10px"><div class="field"><label for="aikey">API key</label><input id="aikey" type="password" autocomplete="off" placeholder="'+(key?'Saved (hidden)':'Paste key')+'"></div>'+
+    '<div class="field"><label for="aimodel">Model name</label><input id="aimodel" value="'+esc(model)+'"></div></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn" data-act="aisave">Save</button>'+(key?'<button class="btn primary" data-act="aiask">Ask AI coach</button><button class="btn ghost" data-act="aiclear">Remove key</button>':'')+'</div></div>';
+  h+='<div id="aiout">'+(S.aiText?'<div class="aitext">'+fmtAi(S.aiText)+'</div>':'')+'</div></section>';
+  return h;
+}
+function copySummary(){
+  var text=buildPrompt(S.date);
+  function fallback(){
+    var o=$("#aiout");if(!o)return;
+    o.innerHTML='<p class="hint">Copy this text and paste it into an AI chat:</p><textarea id="sumbox" rows="8" readonly>'+esc(text)+'</textarea>';
+    var b=$("#sumbox");if(b){b.focus();b.select()}
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(function(){toast("Copied. Paste it into an AI chat")},fallback);
+  else fallback();
+}
+function aiAsk(){
+  var key=lsGet("fitlog.aikey"),model=lsGet("fitlog.aimodel")||"gemini-flash-latest";
+  if(!key){showAi("Paste a Gemini API key first and tap Save.",true);return}
+  showAi("Thinking…");
+  fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({contents:[{role:"user",parts:[{text:buildPrompt(S.date)}]}]})
+  }).then(function(r){return r.json().then(function(j){return {ok:r.ok,status:r.status,j:j}})}).then(function(x){
+    if(!x.ok){
+      var msg=(x.j&&x.j.error&&x.j.error.message)||("Error "+x.status);
+      var hint=x.status===404?" The model name may be out of date. Check the current Flash model name in Google AI Studio and update it above.":x.status===429?" You have reached the free limit for now. Try again later.":(x.status===400||x.status===403)?" Check that the key was pasted correctly and is allowed to use this model.":"";
+      showAi("Could not get a reply: "+msg+hint,true);return;
+    }
+    var parts=(((x.j.candidates||[])[0]||{}).content||{}).parts||[];
+    var text=parts.map(function(p){return p.text||""}).join("");
+    S.aiText=text||"The AI returned an empty reply.";
+    showAi(S.aiText);
+  }).catch(function(){
+    showAi("Could not reach Google. Your network may block it, or this page may be hosted somewhere that does not allow it. Use Option 1 (copy and paste) instead.",true);
+  });
+}
+
 /* progress */
 function progressHtml(){
   var end=S.date,h="";
@@ -741,6 +999,15 @@ document.addEventListener("click",function(e){
     t.closest(".card").querySelectorAll('[data-field="'+f+'"]').forEach(function(b){b.setAttribute("aria-pressed",String(d.body[f]===(+b.dataset.v)))});
     $("#elbowNote").innerHTML=elbowNote(d.body);
   }
+  else if(act==="copysummary"){copySummary()}
+  else if(act==="aisave"){
+    var kv=($("#aikey").value||"").trim(),mv=($("#aimodel").value||"").trim();
+    if(kv)lsSet("fitlog.aikey",kv);
+    lsSet("fitlog.aimodel",mv||"gemini-flash-latest");
+    rerenderPanel();toast("Saved on this device");
+  }
+  else if(act==="aiclear"){lsSet("fitlog.aikey","");S.aiText="";rerenderPanel();toast("Key removed")}
+  else if(act==="aiask"){aiAsk()}
   else if(act==="export"){exportData()}
   else if(act==="settings"){openSettings()}
 });
