@@ -91,6 +91,16 @@ textarea{width:100%;resize:vertical}
 .chip{border:0;background:var(--surface2);border-radius:99px;padding:8px 14px;font-size:14px;font-weight:600}
 .chip:active{background:var(--track)}
 
+.quickbtn{margin-top:10px;width:100%;text-align:left;border:0;background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:700;font-size:14px;border-radius:12px;padding:10px 14px}
+.quickpanel{background:var(--surface2);border-radius:14px;padding:12px;margin-top:8px}
+.quickpanel .chip{background:var(--surface)}
+.quickpanel .chip.alt{opacity:.85}
+.qhead{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--muted)}
+.chip small{margin-left:6px;font-size:11px;font-weight:600;color:var(--muted)}
+.chip.del-chip{color:var(--bad);font-weight:700}
+.remember{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;color:var(--muted);margin-top:10px}
+.remember input{width:18px;height:18px;accent-color:var(--accent)}
+.permsg .linkbtn{font-size:12px;padding:0 0 0 4px}
 /* buttons */
 .btn{border:0;background:var(--surface2);border-radius:12px;padding:11px 16px;font-weight:700;font-size:14px}
 .btn.primary{background:var(--accent);color:var(--accent-ink)}
@@ -199,7 +209,7 @@ var WEEKDAY_NOTE = {3:"Easy walking, gentle mobility or yoga. Avoid anything tha
 var S = {
   date: todayKey(), tab: "diet",
   days: {}, settings: {}, dirty: {},
-  store: null, uid: null, mode: "local", timers: {}
+  store: null, uid: null, mode: "local", timers: {}, quickSlot: null, editQuick: false
 };
 
 /* ---------- helpers ---------- */
@@ -293,6 +303,12 @@ function useLocal(local){
 }
 function ensureSettings(){
   if(!S.settings.startDate){S.settings.startDate=todayKey();scheduleSave("settings")}
+  if(!S.settings.foodsMigrated){
+    var list=S.settings.savedFoods||[],have={};
+    list.forEach(function(f){have[f.n.toLowerCase()]=1});
+    recentFoods(60).forEach(function(f){if(!have[f.n.toLowerCase()]){list.push(f);have[f.n.toLowerCase()]=1}});
+    S.settings.savedFoods=list;S.settings.foodsMigrated=true;scheduleSave("settings");
+  }
 }
 
 /* ---------- derived data ---------- */
@@ -305,12 +321,22 @@ function knownFoods(){
   var map={};
   PRESETS.forEach(function(p){map[p.n.toLowerCase()]=p});
   Object.keys(S.days).sort().forEach(function(k){(S.days[k].meals||[]).forEach(function(m){if(m.n)map[m.n.toLowerCase()]={n:m.n,k:num(m.k),p:num(m.p),c:num(m.c),f:num(m.f)}})});
+  (S.settings.savedFoods||[]).forEach(function(f){map[f.n.toLowerCase()]=f});
   return map;
 }
-function recentFoods(){
+function myFoods(){return S.settings.savedFoods||[]}
+function presetsLeft(){var have={};myFoods().forEach(function(f){have[f.n.toLowerCase()]=1});return PRESETS.filter(function(p){return !have[p.n.toLowerCase()]})}
+function saveFood(f){
+  var list=S.settings.savedFoods||[],l=f.n.toLowerCase(),idx=-1;
+  var item={n:f.n,k:num(f.k),p:num(f.p),c:num(f.c),f:num(f.f)};
+  list.forEach(function(x,i){if(x.n.toLowerCase()===l)idx=i});
+  if(idx>=0)list[idx]=item;else list.unshift(item);
+  S.settings.savedFoods=list;scheduleSave("settings");
+}
+function recentFoods(lim){
   var seen={},out=[];
   Object.keys(S.days).sort().reverse().forEach(function(k){
-    (S.days[k].meals||[]).forEach(function(m){var l=(m.n||"").toLowerCase();if(l&&!seen[l]&&out.length<8){seen[l]=1;out.push({n:m.n,k:num(m.k),p:num(m.p),c:num(m.c),f:num(m.f)})}});
+    (S.days[k].meals||[]).forEach(function(m){var l=(m.n||"").toLowerCase();if(l&&!seen[l]&&out.length<(lim||8)){seen[l]=1;out.push({n:m.n,k:num(m.k),p:num(m.p),c:num(m.c),f:num(m.f)})}});
   });
   return out;
 }
@@ -430,6 +456,25 @@ function updateTotals(){
 }
 
 /* diet */
+function quickPanel(si){
+  var my=myFoods(),pre=presetsLeft(),h='<div class="quickpanel">';
+  if(my.length){
+    h+='<div class="qhead"><span>My foods</span><button class="linkbtn dim" data-act="quickedit">'+(S.editQuick?'Done':'Edit list')+'</button></div><div class="chips">';
+    my.forEach(function(f,i){
+      h+=S.editQuick
+        ?'<button class="chip del-chip" data-act="delfood" data-i="'+i+'">'+esc(f.n)+' ×</button>'
+        :'<button class="chip" data-act="quick" data-slot="'+si+'" data-src="my" data-i="'+i+'">'+esc(f.n)+'<small>'+Math.round(f.k)+'</small></button>';
+    });
+    h+='</div>';
+  } else {
+    h+='<div class="muted">Foods you add with “Remember this food” ticked will show up here.</div>';
+  }
+  if(pre.length){
+    h+='<div class="qhead" style="margin-top:12px"><span>Common foods (rough estimates)</span></div><div class="chips">'+
+      pre.map(function(f,i){return '<button class="chip alt" data-act="quick" data-slot="'+si+'" data-src="preset" data-i="'+i+'">'+esc(f.n)+'<small>'+Math.round(f.k)+'</small></button>'}).join('')+'</div>';
+  }
+  return h+'<div class="permsg" style="margin-top:8px">Tapping a food adds 1 portion to this meal. Change the portions afterwards.</div></div>';
+}
 function dietHtml(){
   var d=getDay(S.date),foods=knownFoods();
   var h='<datalist id="foodlist">'+Object.keys(foods).map(function(l){return '<option value="'+esc(foods[l].n)+'">'}).join("")+'</datalist>';
@@ -447,19 +492,17 @@ function dietHtml(){
         '<div class="ftot" id="ft'+i+'">'+totLine(m)+'</div></div>'+
         '<div class="macros">'+
         [["k","kcal"],["p","P"],["c","C"],["f","F"]].map(function(f){return '<label class="mi '+f[0]+'"><span>'+f[1]+'</span><input type="number" inputmode="decimal" min="0" step="any" value="'+esc(m[f[0]])+'" data-bind="meal" data-i="'+i+'" data-k="'+f[0]+'"></label>'}).join("")+
-        '</div><div class="permsg">Macros are for 1 portion. Total = macros × portions.</div></div>';
+        '</div><div class="permsg">Macros are for 1 portion. <button class="linkbtn" data-act="savefood" data-i="'+i+'">Save to My foods</button></div></div>';
     });
-    h+='<div class="addform" data-slot="'+si+'"><input class="nm" list="foodlist" placeholder="Add a food, e.g. Paneer 100 g" data-add="n" autocomplete="off" aria-label="Food name">'+
+    h+='<button class="quickbtn" data-act="quicktoggle" data-slot="'+si+'" aria-expanded="'+(S.quickSlot===si)+'">⚡ Quick add to '+esc(slot.split(" /")[0])+' '+(S.quickSlot===si?'▴':'▾')+'</button>';
+    if(S.quickSlot===si)h+=quickPanel(si);
+    h+='<div class="addform" data-slot="'+si+'"><input class="nm" list="foodlist" placeholder="New food, e.g. Paneer 100 g" data-add="n" autocomplete="off" aria-label="Food name">'+
       '<div class="addgrid">'+
       '<div><span class="lbl">Portions</span><input type="number" inputmode="decimal" min="0" step="any" value="1" data-add="q"></div>'+
       [["k","kcal"],["p","P"],["c","C"],["f","F"]].map(function(f){return '<div><span class="lbl">'+f[1]+'</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="0" data-add="'+f[0]+'"></div>'}).join("")+
-      '<button class="addbtn" data-act="addmeal" data-slot="'+si+'" aria-label="Add">+</button></div></section>';
+      '<button class="addbtn" data-act="addmeal" data-slot="'+si+'" aria-label="Add">+</button></div>'+
+      '<label class="remember"><input type="checkbox" data-add="save" checked> Remember this food for quick add</label></div></section>';
   });
-  var rec=recentFoods();
-  h+='<section class="card"><h2>Quick add</h2><div class="muted">Tap to add one portion to the slot you last used, then change the portions. Values are rough estimates, so edit them to match what you eat.</div><div class="chips">'+
-    rec.map(function(f,i){return '<button class="chip" data-act="quick" data-src="recent" data-i="'+i+'">'+esc(f.n)+'</button>'}).join("")+
-    PRESETS.map(function(f,i){return '<button class="chip" data-act="quick" data-src="preset" data-i="'+i+'">'+esc(f.n)+'</button>'}).join("")+
-    '</div></section>';
   h+='<section class="card"><h2>💧 Water</h2><div class="waterrow">'+
     '<button class="btn water" data-act="water" data-ml="250">+250 ml</button>'+
     '<button class="btn water" data-act="water" data-ml="500">+500 ml</button>'+
@@ -655,17 +698,26 @@ document.addEventListener("click",function(e){
     var q=numOrNull(form.querySelector('[data-add="q"]').value);
     var m={id:uid(),slot:si,n:n,q:(q==null?1:q)};
     ["k","p","c","f"].forEach(function(f){m[f]=numOrNull(form.querySelector('[data-add="'+f+'"]').value)||0});
-    d.meals.push(m);lastSlot=si;mark();rerenderPanel();
+    d.meals.push(m);lastSlot=si;mark();
+    var rem=form.querySelector('[data-add="save"]');
+    if(rem&&rem.checked){saveFood(m);toast("Added and saved to My foods")}
+    rerenderPanel();
   }
   else if(act==="delmeal"){d.meals.splice(+t.dataset.i,1);mark();rerenderPanel()}
   else if(act==="qty"){
     var mm=d.meals[+t.dataset.i];mm.q=Math.max(0,r2(mq(mm)+(+t.dataset.d)));mark();rerenderPanel();
   }
+  else if(act==="quicktoggle"){var qs=+t.dataset.slot;S.quickSlot=(S.quickSlot===qs)?null:qs;S.editQuick=false;rerenderPanel()}
+  else if(act==="quickedit"){S.editQuick=!S.editQuick;rerenderPanel()}
   else if(act==="quick"){
-    var fd=t.dataset.src==="recent"?recentFoods()[+t.dataset.i]:PRESETS[+t.dataset.i];
-    d.meals.push({id:uid(),slot:lastSlot,n:fd.n,q:1,k:fd.k,p:fd.p,c:fd.c,f:fd.f});mark();rerenderPanel();
-    toast("Added to "+SLOTS[lastSlot]);
+    var qsl=+t.dataset.slot;
+    var fd=t.dataset.src==="my"?myFoods()[+t.dataset.i]:presetsLeft()[+t.dataset.i];
+    if(!fd)return;
+    d.meals.push({id:uid(),slot:qsl,n:fd.n,q:1,k:fd.k,p:fd.p,c:fd.c,f:fd.f});mark();rerenderPanel();
+    toast("Added to "+SLOTS[qsl]);
   }
+  else if(act==="delfood"){myFoods().splice(+t.dataset.i,1);scheduleSave("settings");rerenderPanel()}
+  else if(act==="savefood"){var sm=d.meals[+t.dataset.i];if(sm&&sm.n){saveFood(sm);rerenderPanel();toast("Saved to My foods")}}
   else if(act==="water"){d.water=Math.max(0,d.water+(+t.dataset.ml));mark();var wn=$("#waterNote");if(wn)wn.textContent=(d.water/1000).toFixed(2)+" L today";updateTotals()}
   else if(act==="waterreset"){d.water=0;mark();var wn2=$("#waterNote");if(wn2)wn2.textContent="0.00 L today";updateTotals()}
   else if(act==="starttype"){w.type=t.dataset.type;mark();rerenderPanel();}
